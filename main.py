@@ -13,15 +13,7 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import exc
 import random, re, time, _thread
 from datetime import datetime, timedelta, timezone
-import json, requests, pathlib, pyimgur
-# import plotly.graph_objects as go
-# import networkx as nx
-# from svglib.svglib import svg2rlg
-# from reportlab.graphics import renderPM
-# from selenium.webdriver.support import expected_conditions as EC
-# from selenium.webdriver.support.ui import WebDriverWait
-# from selenium.common.exceptions import TimeoutException
-# import unicodedata
+import json, requests
 
 
 app = Flask(__name__)
@@ -462,154 +454,34 @@ def handle_message(event):
         get_V3_notes(notes, reply_token)
 
 
-    # [Step 0] or [統編查詢公司關係]
+    # Step 0
     else:
-###################  以下嘗試將svg轉png後丟出  #######################
+        try:
+            keyword = str(message).upper()
+            newInput = Activities(userid=user_id, date=today, activity=keyword, status='日期待確認')
+            db.session.add(newInput)
+            db.session.commit()
+            print(f"\n ------------ Step 0 ------------ id: {newInput.id}")
+        except exc.InvalidRequestError:
+            db.session.rollback()
+        except Exception as e:
+            print(e)
 
-        # # The webpage is rendered dynamically with Javascript, so you will need selenium to get the rendered page.
+        Aid = str(newInput.id)
 
-        # url = "https://company-graph.g0v.ronny.tw/?id={0}".format("22099131")
+        # FlexMessage Menu
+        # 載入menu
+        Menu = json.load(open('menu.json','r',encoding='utf-8'))
+        actions = Menu['contents'][0]['body']['contents']
 
-        # #發送 GET 請求到 url，並將回應物件放到 resp
-        # # resp = requests.get(url)
+        actions[0]['action']['data'] = f'add_schedule&{Aid}'
+        actions[1]['action']['data'] = f'search_schedule&{keyword}&{Aid}'
+        actions[2]['action']['data'] = f'add_note&{Aid}'
+        actions[3]['action']['data'] = f'search_note&{keyword}&{Aid}'
+        actions[4]['action']['data'] = f'add_routine_1&{keyword}&{Aid}'
+        actions[5]['action']['data'] = f'search_routine&{keyword}&{Aid}'
 
-        # from selenium import webdriver
-        # from selenium.webdriver.chrome.service import Service
-        # from webdriver_manager.chrome import ChromeDriverManager
-        # from selenium.webdriver.common.by import By
-
-        # s=Service(ChromeDriverManager().install())
-
-        # options = webdriver.ChromeOptions()
-        # options.add_experimental_option('excludeSwitches', ['enable-automation'])
-        # options.add_experimental_option('useAutomationExtension', False)
-        # options.add_experimental_option("prefs", {"profile.password_manager_enabled": False, "credentials_enable_service": False})
-
-        # driver = webdriver.Chrome(service=s, options=options, service_log_path=os.devnull)
-        # driver.maximize_window()
-        # driver.get(url)
-        # timeout = 10
-        # try:
-        #     element_present = EC.presence_of_element_located((By.ID, 'element_id'))
-        #     WebDriverWait(driver, timeout).until(element_present)
-        # except TimeoutException:
-        #     print("Timed out waiting for page to load")
-
-        # elements = driver.find_elements(By.XPATH, '//*[@id="parent"]')
-
-        # parentElement = elements[0]
-
-        # svg = parentElement.get_attribute('innerHTML')
-        # # print(svg)
-        # # print(type(svg))
-        # # svg = svg.encode('utf-8')
-        # # print(svg)
-        # # print(type(svg))
-        # # return
-
-        # with open("temp/svgTest.svg", "w", encoding='utf-8') as svg_file:
-        #     svg_file.write(svg)
-
-
-        # url = requests.get("https://company-graph.g0v.ronny.tw/?id={0}".format("22099131"))
-        # print(type(url))
-        # print(url)
-        # print("\n\n\n\n\n\n\n")
-
-        # text = url.text
-        # print(type(text))
-        # print(text)
-        
-        # data = json.loads(text)
-        # print(type(data))
-        # print(data[0][0])
-
-        # # 想辦法下載svg區塊
-
-        # # 將下載的svg轉成png
-        #     # 這裡要解決轉檔後中文變成亂碼: 編碼問題
-
-        # drawing = svg2rlg('temp/svgTest.svg')
-        # renderPM.drawToFile(drawing, 'temp/svgTest.png', fmt='PNG')
-
-        # # 上傳png到imgur
-        # CLIENT_ID = "b204114a90ad0e1"
-        # im = pyimgur.Imgur(CLIENT_ID)
-        # cur_path = pathlib.Path().resolve() / 'temp/'
-        # dest_path = cur_path.__str__()+"/companysocialnetwork.png"
-        # print(f"fileName: {dest_path}")
-        # title = "Uploaded with PyImgur"
-        # uploaded_image = im.upload_image(dest_path, title=title)
-        # print(uploaded_image.title)
-        # print(uploaded_image.link)
-        # print(uploaded_image.type)
-        
-
-        # # 丟出imgur網址
-        # image_message = ImageSendMessage(
-        #     original_content_url=uploaded_image.link,
-        #     preview_image_url=uploaded_image.link
-        # )
-        # line_bot_api.reply_message(reply_token, image_message)
-###################  以上嘗試將svg轉png後丟出  #######################
-
-
-
-        message == str(message)
-        # 正規表達過濾出純數字
-        pattern = re.compile(r'^[-+]?[-0-9]\d*\.\d*|[-+]?\.?[0-9]\d*$')
-        result = pattern.match(message)
-
-        if result:
-            # company_id 可能是統一編號，也可能是股票代號
-            company_id = message
-
-            print(f"\n ------------ 依統編or股票代號查詢公司 Company_id: {company_id} ------------")
-
-            FlexMessage = json.load(open('company_info.json','r',encoding='utf-8'))
-
-            FlexMessage['body']['contents'][0]['text'] = FlexMessage['body']['contents'][0]['text'] + f": {company_id}"
-
-            elements = FlexMessage['footer']['contents']
-            for element in elements:
-                if element['type'] == 'button' and element['action']['label'] != '股權異動查詢':
-                    element['action']['uri'] = str(element['action']['uri']) + f"{company_id}"
-                if element['type'] == 'button' and element['action']['label'] == '公司關係圖(統編)':
-                    element['action']['uri'] = str(element['action']['uri']) + "&openExternalBrowser=1"
-
-
-
-            line_bot_api.reply_message(reply_token, FlexSendMessage('Company Info',FlexMessage))
-
-
-        # Step 0
-        else:
-            try:
-                keyword = str(message).upper()
-                newInput = Activities(userid=user_id, date=today, activity=keyword, status='日期待確認')
-                db.session.add(newInput)
-                db.session.commit()
-                print(f"\n ------------ Step 0 ------------ id: {newInput.id}")
-            except exc.InvalidRequestError:
-                db.session.rollback()
-            except Exception as e:
-                print(e)
-
-            Aid = str(newInput.id)
-
-            # FlexMessage Menu
-            # 載入menu
-            Menu = json.load(open('menu.json','r',encoding='utf-8'))
-            actions = Menu['contents'][0]['body']['contents']
-
-            actions[0]['action']['data'] = f'add_schedule&{Aid}'
-            actions[1]['action']['data'] = f'search_schedule&{keyword}&{Aid}'
-            actions[2]['action']['data'] = f'add_note&{Aid}'
-            actions[3]['action']['data'] = f'search_note&{keyword}&{Aid}'
-            actions[4]['action']['data'] = f'add_routine_1&{keyword}&{Aid}'
-            actions[5]['action']['data'] = f'search_routine&{keyword}&{Aid}'
-
-            line_bot_api.reply_message(reply_token, FlexSendMessage('Menu', Menu))
+        line_bot_api.reply_message(reply_token, FlexSendMessage('Menu', Menu))
 
 
 
@@ -1480,8 +1352,6 @@ def handle_postback(event):
 
 ######### 以下放多次使用的 def #########
 
-
-
 # 取得多個固定行程內容[Flex template]
 def get_V3_routines(activities_routine, reply_token, isPast):
     if len(activities_routine) > 0:
@@ -1650,27 +1520,6 @@ def get_V3_activity(id, reply_token, ifupdate):
     line_bot_api.reply_message(reply_token, buttons_template_message)
 
 
-
-
-
-def formatting(date, activity):
-    context = f"{date}\n{activity}\n"
-    return context
-
-
-def get_week_day(num):
-    week_day_dict = {
-        1: '一',
-        2: '二',
-        3: '三',
-        4: '四',
-        5: '五',
-        6: '六',
-        7: '日',
-    }
-    return week_day_dict[num]
-
-
 # Message event: Sticker
 @handler.add(MessageEvent, message=StickerMessage)
 def handle_sticker_message(event):
@@ -1682,6 +1531,6 @@ def handle_sticker_message(event):
 
 import os
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 8888))
+    port = int(os.environ.get('PORT', 8889))
     _thread.start_new_thread(periodGuy, ())
     app.run(host='0.0.0.0', port=port)
