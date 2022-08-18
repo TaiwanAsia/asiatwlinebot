@@ -453,6 +453,23 @@ def handle_message(event):
 
         get_V3_notes(notes, reply_token)
 
+    
+    # 查看使用教學
+    elif message == "使用教學":
+        str_1 = """歡迎來到使用教學～～\n目前有三個項目我會幫您 [記錄] 與 [提醒] ，分別是
+1. 單次行程
+2. 固定行程
+3. 記事(備忘錄)"""
+        line_bot_api.push_message(user_id, TextSendMessage(text=str_1))
+
+        str_2 = """使用方式->直接輸入關鍵字\n現在試試看輸入關鍵字吧！\nEX:
+        家庭聚餐
+        固定週會
+        Netflix密碼123okok"""
+        line_bot_api.push_message(user_id, TextSendMessage(text=str_2))
+        str_3 = """想查詢所有資訊的話\n\n輸入"菜單" 或是 "Menu" \n\n就可以選擇想瀏覽的項目囉！！"""
+        line_bot_api.push_message(user_id, TextSendMessage(text=str_3))
+        
 
     # Step 0
     else:
