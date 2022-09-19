@@ -13,3 +13,4 @@ app_config = "mysql+pymysql://root:root@127.0.0.1:3306/asiatwlinebot"
 # line_bot_api = LineBotApi('n3mS5jbtDnOFx/2D08RjFd1/xYDRIA3q8pIRseVtCjOQfEN5EGCa6y7iHkJn8z6GXWzdUTlRSFnPvYeEbxThl765WinmC33U6ZufRQJ7hxbAgdiEZrn99ZUhdjamx0SGdYgKdzRzedpqISaTQZ07IwdB04t89/1O/w1cDnyilFU=')
 # handler = WebhookHandler('732633e1970cad234502531cd100ba40')
 # app.config['SQLALCHEMY_DATABASE_URI'] = "mysql+pymysql://root:root@127.0.0.1:3306/linebot"
+# port = 8889

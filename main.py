@@ -1548,6 +1548,6 @@ def handle_sticker_message(event):
 
 import os
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 8889))
+    port = int(os.environ.get('PORT', config.port))
     _thread.start_new_thread(periodGuy, ())
     app.run(host='0.0.0.0', port=port)
