@@ -1,16 +1,11 @@
 
 
-# 金秘書
-line_bot_api = 'QjsvCW39MCuSLHErUlch3wa/DpI/Pj19p+9Lovf+FrMMUri1VLDc7klFetz4/bfcF6LP1STRbNjR+LX1ykE59Ab8hbaEupxWchLzAjz3DD3tgDOgnneQ2Cjm4uA0CJpbDmYGMEyoEY5Kb0iqABAjTgdB04t89/1O/w1cDnyilFU='
-handler = '3993c4bdf4997225db18561d3244971b'
+# 登入LINE Developers 裡的 Channel access token
+line_bot_api = 'channel access token'
+# 登入LINE Official Account Manager 裡的 Channel secret
+handler = 'channel secret'
 
 # 資料庫設定
-# app.config['SQLALCHEMY_DATABASE_URI'] = "mysql+pymysql://b2c093cf2e3775:087cc1cd@us-cdbr-east-04.cleardb.com/heroku_38af9ed956129ed"
-app_config = "mysql+pymysql://root:root@127.0.0.1:3306/asiatwlinebot"
+app_config = "mysql+pymysql://帳號:密碼@主機IP:PORT/資料庫名稱"
 
-
-# IU
-# line_bot_api = LineBotApi('n3mS5jbtDnOFx/2D08RjFd1/xYDRIA3q8pIRseVtCjOQfEN5EGCa6y7iHkJn8z6GXWzdUTlRSFnPvYeEbxThl765WinmC33U6ZufRQJ7hxbAgdiEZrn99ZUhdjamx0SGdYgKdzRzedpqISaTQZ07IwdB04t89/1O/w1cDnyilFU=')
-# handler = WebhookHandler('732633e1970cad234502531cd100ba40')
-# app.config['SQLALCHEMY_DATABASE_URI'] = "mysql+pymysql://root:root@127.0.0.1:3306/linebot"
-# port = 8889
+# port = 欲使用的port
