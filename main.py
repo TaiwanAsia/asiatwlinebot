@@ -14,6 +14,8 @@ from sqlalchemy import exc
 import random, re, time, _thread
 from datetime import datetime, timedelta, timezone
 import json, requests
+from common.common import get_user, get_group, check_chatroom_uploads_folder, get_uploads_file
+from models import group_model, user_model
 
 
 app = Flask(__name__)
@@ -89,19 +91,19 @@ with app.app_context():
 
 
 # ============讓Heroku不會睡著============
-import threading
+# import threading
 import requests
-def wake_up_heroku():
-    while 1==1:
-        url = 'https://asiatwlinebot.herokuapp.com/' + 'heroku_wake_up'
-        res = requests.get(url)
-        if res.status_code == 200:
-            print('Heroku喚醒成功')
-        else:
-            print('喚醒失敗')
-        time.sleep(28*60)
+# def wake_up_heroku():
+#     while 1==1:
+#         url = 'https://asiatwlinebot.herokuapp.com/' + 'heroku_wake_up'
+#         res = requests.get(url)
+#         if res.status_code == 200:
+#             print('Heroku喚醒成功')
+#         else:
+#             print('喚醒失敗')
+#         time.sleep(28*60)
 
-threading.Thread(target=wake_up_heroku).start()
+# threading.Thread(target=wake_up_heroku).start()
 # ============讓Heroku不會睡著============
 
 
@@ -301,204 +303,325 @@ def callback():
         abort(400)
     return 'OK'
 
+
+# Message event: File處理
+@handler.add(MessageEvent, message=FileMessage)
+def handler_message(event):
+    user = get_user(event.source.user_id)
+    if event.source.type == 'group':
+        group = get_group(event.source.group_id)
+        chatroom    = group
+        chatroom_id = group.group_id
+    else:
+        chatroom    = user
+        chatroom_id = user.user_id
+        
+    if chatroom.file_reply == 'off':
+        return
+    else:
+        # add_log(chatroom, 'upload file', str(event.message))
+        content = line_bot_api.get_message_content(event.message.id)
+        check_chatroom_uploads_folder(chatroom_id)
+        path = './uploads/' + chatroom_id + '/' + event.message.file_name
+        if os.path.exists(path):
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="此檔名已存在。"))
+            raise FileExistsError("此檔名已存在。")
+        try:
+            with open(path, 'wb') as fd:
+                for chunk in content.iter_content():
+                    fd.write(chunk)
+        except Exception as e:
+            print('發生錯誤', e)
+        finally:
+            print("儲存結束")
+        return
+
+# Message event: Image處理
+@handler.add(MessageEvent, message=ImageMessage)
+def handle_message(event):
+    user = get_user(event.source.user_id)
+    if event.source.type == 'group':
+        group = get_group(event.source.group_id)
+        chatroom    = group
+        chatroom_id = group.group_id
+    else:
+        chatroom    = user
+        chatroom_id = user.user_id
+    if chatroom.file_reply == 'off':
+        return
+    else:
+        # add_log(chatroom, 'upload file', str(event.message))
+        content = line_bot_api.get_message_content(event.message.id)
+        check_chatroom_uploads_folder(chatroom_id)
+        path = './uploads/' + chatroom_id + '/' + event.message.id + '.png'
+        try:
+            with open(path, 'wb') as fd:
+                for chunk in content.iter_content():
+                    fd.write(chunk)
+        except Exception as e:
+            print('發生錯誤', e)
+        finally:
+            print("儲存結束")
+        return
+
+
 # Message event: Text處理
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     message_type = event.message.type
-    user_id = event.source.user_id
+    # user_id = event.source.user_id
+    user = get_user(event.source.user_id)
     reply_token = event.reply_token
     message = event.message.text
     today = datetime.now().strftime("%Y-%m-%d")
     todaytime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     defaulttime = f"{today}" + "T" + str(datetime.now().strftime("%H")) + ":" + str(datetime.now().strftime("%M"))
 
-    possible_message = ['至明天', '三天內', '七天內', '一周內', '一週內', '一個月', '未來所有行程', '今日完成行程']
 
-    # 主菜單
-    if re.match("菜單",message) or message == "menu" or message == "Menu" or message == "M":
-        buttons_template_message = TemplateSendMessage(
-            alt_text='主菜單',
-            template=ButtonsTemplate(
-                thumbnail_image_url='https://free.com.tw/blog/wp-content/uploads/2014/08/Placekitten480.jpg',
-                image_aspect_ratio='rectangle',
-                image_size='cover',
-                image_background_color='#FFFFFF',
-                title='Menu',
-                text='選擇動作',
-                default_action=URIAction(
-                    label='view detail',
-                    uri='http://example.com/page/123'
-                ),
-                actions=[
-                    MessageAction(
-                        label = "瀏覽行程",
-                        text  = "瀏覽行程"
-                    ),
-                    MessageAction(
-                        label = "刪除行程",
-                        text  = "刪除行程"
-                    ),
-                    MessageAction(
-                        label = "刪除記事",
-                        text  = "刪除記事"
-                    ),
-                ]
-            )
-        )
-        line_bot_api.reply_message(reply_token, buttons_template_message)
-
-    # 查詢行程-1
-    elif re.match("瀏覽所有行程", message):
-        print(f"\n ------------ 瀏覽所有行程 ------------")
-        
-        buttons_template_message = TemplateSendMessage(
-            alt_text='行程瀏覽',
-            template=ButtonsTemplate(
-                thumbnail_image_url='https://free.com.tw/blog/wp-content/uploads/2014/08/Placekitten480.jpg',
-                image_aspect_ratio='rectangle',
-                image_size='cover',
-                image_background_color='#FFFFFF',
-                title='瀏覽行程',
-                text='選擇欲瀏覽範圍',
-                default_action=URIAction(
-                    label='view detail',
-                    uri='http://example.com/page/123'
-                ),
-                actions=[
-                    MessageAction(
-                        label = "至明天",
-                        text  = "至明天"
-                    ),
-                    MessageAction(
-                        label = "七天內",
-                        text  = "七天內"
-                    ),
-                    MessageAction(
-                        label = "未來所有行程",
-                        text  = "未來所有行程"
-                    ),
-                    MessageAction(
-                        label = "今日完成行程",
-                        text  = "今日完成行程"
-                    ),
-                ]
-            )
-        )
-        line_bot_api.reply_message(reply_token, buttons_template_message)
-
-
-    # 查詢行程-2
-    elif message in possible_message:
-        isPast = False
-        if message == "今日完成行程":
-            isPast = True
-            sql_cmd = f"""SELECT id, date, activity FROM activities WHERE
-            userid = '{user_id}' AND date BETWEEN '{today}' AND '{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}' AND status = '已確認'
-            ORDER BY `date`"""
-        else:
-            add_days = 9999
-            if re.match('至明天',message):
-                add_days = 2
-            if message == "三天內":
-                add_days = 4
-            if message == "七天內" or message == "一周內" or message == "一週內":
-                add_days = 8
-
-            date2 = (datetime.now() + timedelta(days=add_days)).strftime("%Y-%m-%d") 
-            sql_cmd = f"""SELECT id, date, activity FROM activities WHERE
-                userid = '{user_id}' AND date BETWEEN '{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}' AND '{date2}' AND status = '已確認'
-                ORDER BY `date`"""
-
-        activities = db.engine.execute(sql_cmd).fetchall()
-
-        get_V3_activities(activities, reply_token, isPast)
-
-
-    # 關閉提醒
-    elif re.match(r"OK", message, re.IGNORECASE):
-        Eid = int(message[2:])
-        
-        for idx, val in enumerate(alertList):
-            if val[0] == Eid:
-                if val[4] == '已確認':
-                    sql = f"UPDATE activities SET status = '已提醒1' WHERE id = '{Eid}'"
-                    alertList[idx][4] = "已提醒1"
-                    reply = "第一次提醒已關閉。"
-                elif val[4] == '已提醒1':
-                    sql = f"UPDATE activities SET status = '已提醒2' WHERE id = '{Eid}'"
-                    alertList[idx][4] = "已提醒2"
-                    reply = "第二次提醒已關閉。"
-
-        db.engine.execute(sql)
-        print(f"{reply}: {Eid}")
-        line_bot_api.reply_message(reply_token, TextSendMessage(text = f"行程{Eid}: {reply}"))
-
-
-    # 瀏覽所有固定行程
-    elif message == "瀏覽所有固定行程":
-        print(f"\n ------------ 瀏覽所有固定行程 ------------")
-
-        sql = 'SELECT * FROM `activities_routine` WHERE `status` = "finish" AND `userid` = "{0}"'.format(user_id)
-        activities_routine = db.engine.execute(sql).fetchall()
-
-        get_V3_routines(activities_routine, reply_token, False)
-    
-    
-    # 瀏覽所有記事
-    elif message == "瀏覽所有記事":
-        print(f"\n ------------ 瀏覽所有記事 ------------")
-
-        sql = 'SELECT id, title, status FROM `notes` WHERE `status` = "成功" AND `userid` = "{0}"'.format(user_id)
-        notes = db.engine.execute(sql).fetchall()
-
-        get_V3_notes(notes, reply_token)
-
-    
-    # 查看使用教學
-    elif message == "使用教學":
-        str_1 = """歡迎來到使用教學～～\n目前有三個項目我會幫您 [記錄] 與 [提醒] ，分別是
-1. 單次行程
-2. 固定行程
-3. 記事(備忘錄)"""
-        line_bot_api.push_message(user_id, TextSendMessage(text=str_1))
-
-        str_2 = """使用方式->直接輸入關鍵字\n現在試試看輸入關鍵字吧！\nEX:
-        家庭聚餐
-        固定週會
-        Netflix密碼123okok"""
-        line_bot_api.push_message(user_id, TextSendMessage(text=str_2))
-        str_3 = """想查詢所有資訊的話\n\n輸入"菜單" 或是 "Menu" \n\n就可以選擇想瀏覽的項目囉！！"""
-        line_bot_api.push_message(user_id, TextSendMessage(text=str_3))
-        
-
-    # Step 0
+    if event.source.type == 'group':
+        group = get_group(event.source.group_id)
+        chatroom    = group
+        chatroom_id = group.group_id
     else:
-        try:
-            keyword = str(message).upper()
-            newInput = Activities(userid=user_id, date=today, activity=keyword, status='日期待確認')
-            db.session.add(newInput)
-            db.session.commit()
-            print(f"\n ------------ Step 0 ------------ id: {newInput.id}")
-        except exc.InvalidRequestError:
-            db.session.rollback()
-        except Exception as e:
-            print(e)
+        chatroom    = user
+        chatroom_id = user.user_id
+    if message == '設定':
+        SettingsMessage = json.load(open('templates/settings.json', 'r', encoding='utf-8'))
+        box = SettingsMessage["body"]["contents"]
+        if chatroom.text_reply == 'off':
+            box[0]['action']['label']       = '開啟文字訊息自動回覆'
+            box[0]['action']['data']        = 'text&on&'
+            box[0]['action']['displayText'] = '開啟文字訊息自動回覆'
+        box[0]['action']['data'] += chatroom_id
+        if chatroom.file_reply == 'off':
+            box[1]['action']['label']       = '開啟文件訊息自動儲存'
+            box[1]['action']['data']        = 'file&on&'
+            box[1]['action']['displayText'] = '開啟文件訊息自動儲存'
+        box[1]['action']['data'] += chatroom_id
+        if chatroom.image_reply == 'off':
+            box[2]['action']['label']       = '開啟圖片訊息自動儲存'
+            box[2]['action']['data']        = 'image&on&'
+            box[2]['action']['displayText'] = '開啟圖片訊息自動儲存'
+        box[2]['action']['data'] += chatroom_id
+        line_bot_api.reply_message(reply_token, FlexSendMessage('Settings Info', SettingsMessage, quick_reply=QuickReply(
+            items=[
+                QuickReplyButton(action=MessageAction(label='設定', text='設定'))
+            ]
+        )))
+        return
+    elif message in ['文件', '檔案', '備份', '圖片']:
+        SettingsMessage = json.load(open('templates/settings.json', 'r', encoding='utf-8'))
+        box = SettingsMessage["body"]["contents"]
+        box[0]['action']['label']       = '檢視儲存文件'
+        box[0]['action']['data']        = 'file&view&'
+        box[0]['action']['displayText'] = '檢視儲存文件'
+        box[0]['action']['data'] += chatroom_id
+        box[1]['action']['label']       = '檢視儲存圖片'
+        box[1]['action']['data']        = 'image&view&'
+        box[1]['action']['displayText'] = '檢視儲存圖片'
+        box[1]['action']['data'] += chatroom_id
+        del box[2]
+        line_bot_api.reply_message(reply_token, FlexSendMessage('Settings Info', SettingsMessage, quick_reply=QuickReply(
+            items=[
+                QuickReplyButton(action=MessageAction(label='設定', text='設定'))
+            ]
+        )))
+        return
 
-        Aid = str(newInput.id)
 
-        # FlexMessage Menu
-        # 載入menu
-        Menu = json.load(open('menu.json','r',encoding='utf-8'))
-        actions = Menu['contents'][0]['body']['contents']
+    if chatroom.text_reply == 'off':
+        return
+    else:
 
-        actions[0]['action']['data'] = f'add_schedule&{Aid}'
-        actions[1]['action']['data'] = f'search_schedule&{keyword}&{Aid}'
-        actions[2]['action']['data'] = f'add_note&{Aid}'
-        actions[3]['action']['data'] = f'search_note&{keyword}&{Aid}'
-        actions[4]['action']['data'] = f'add_routine_1&{keyword}&{Aid}'
-        actions[5]['action']['data'] = f'search_routine&{keyword}&{Aid}'
+        
 
-        line_bot_api.reply_message(reply_token, FlexSendMessage('Menu', Menu))
+
+        possible_message = ['至明天', '三天內', '七天內', '一周內', '一週內', '一個月', '未來所有行程', '今日完成行程']
+        # 主菜單
+        if re.match("菜單",message) or message == "menu" or message == "Menu" or message == "M":
+            buttons_template_message = TemplateSendMessage(
+                alt_text='主菜單',
+                template=ButtonsTemplate(
+                    thumbnail_image_url='https://free.com.tw/blog/wp-content/uploads/2014/08/Placekitten480.jpg',
+                    image_aspect_ratio='rectangle',
+                    image_size='cover',
+                    image_background_color='#FFFFFF',
+                    title='Menu',
+                    text='選擇動作',
+                    default_action=URIAction(
+                        label='view detail',
+                        uri='http://example.com/page/123'
+                    ),
+                    actions=[
+                        MessageAction(
+                            label = "瀏覽行程",
+                            text  = "瀏覽行程"
+                        ),
+                        MessageAction(
+                            label = "刪除行程",
+                            text  = "刪除行程"
+                        ),
+                        MessageAction(
+                            label = "刪除記事",
+                            text  = "刪除記事"
+                        ),
+                    ]
+                )
+            )
+            line_bot_api.reply_message(reply_token, buttons_template_message)
+
+        # 查詢行程-1
+        elif re.match("瀏覽所有行程", message):
+            print(f"\n ------------ 瀏覽所有行程 ------------")
+            
+            buttons_template_message = TemplateSendMessage(
+                alt_text='行程瀏覽',
+                template=ButtonsTemplate(
+                    thumbnail_image_url='https://free.com.tw/blog/wp-content/uploads/2014/08/Placekitten480.jpg',
+                    image_aspect_ratio='rectangle',
+                    image_size='cover',
+                    image_background_color='#FFFFFF',
+                    title='瀏覽行程',
+                    text='選擇欲瀏覽範圍',
+                    default_action=URIAction(
+                        label='view detail',
+                        uri='http://example.com/page/123'
+                    ),
+                    actions=[
+                        MessageAction(
+                            label = "至明天",
+                            text  = "至明天"
+                        ),
+                        MessageAction(
+                            label = "七天內",
+                            text  = "七天內"
+                        ),
+                        MessageAction(
+                            label = "未來所有行程",
+                            text  = "未來所有行程"
+                        ),
+                        MessageAction(
+                            label = "今日完成行程",
+                            text  = "今日完成行程"
+                        ),
+                    ]
+                )
+            )
+            line_bot_api.reply_message(reply_token, buttons_template_message)
+
+
+        # 查詢行程-2
+        elif message in possible_message:
+            isPast = False
+            if message == "今日完成行程":
+                isPast = True
+                sql_cmd = f"""SELECT id, date, activity FROM activities WHERE
+                userid = '{user_id}' AND date BETWEEN '{today}' AND '{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}' AND status = '已確認'
+                ORDER BY `date`"""
+            else:
+                add_days = 9999
+                if re.match('至明天',message):
+                    add_days = 2
+                if message == "三天內":
+                    add_days = 4
+                if message == "七天內" or message == "一周內" or message == "一週內":
+                    add_days = 8
+
+                date2 = (datetime.now() + timedelta(days=add_days)).strftime("%Y-%m-%d") 
+                sql_cmd = f"""SELECT id, date, activity FROM activities WHERE
+                    userid = '{user_id}' AND date BETWEEN '{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}' AND '{date2}' AND status = '已確認'
+                    ORDER BY `date`"""
+
+            activities = db.engine.execute(sql_cmd).fetchall()
+
+            get_V3_activities(activities, reply_token, isPast)
+
+
+        # 關閉提醒
+        elif re.match(r"OK", message, re.IGNORECASE):
+            Eid = int(message[2:])
+            
+            for idx, val in enumerate(alertList):
+                if val[0] == Eid:
+                    if val[4] == '已確認':
+                        sql = f"UPDATE activities SET status = '已提醒1' WHERE id = '{Eid}'"
+                        alertList[idx][4] = "已提醒1"
+                        reply = "第一次提醒已關閉。"
+                    elif val[4] == '已提醒1':
+                        sql = f"UPDATE activities SET status = '已提醒2' WHERE id = '{Eid}'"
+                        alertList[idx][4] = "已提醒2"
+                        reply = "第二次提醒已關閉。"
+
+            db.engine.execute(sql)
+            print(f"{reply}: {Eid}")
+            line_bot_api.reply_message(reply_token, TextSendMessage(text = f"行程{Eid}: {reply}"))
+
+
+        # 瀏覽所有固定行程
+        elif message == "瀏覽所有固定行程":
+            print(f"\n ------------ 瀏覽所有固定行程 ------------")
+
+            sql = 'SELECT * FROM `activities_routine` WHERE `status` = "finish" AND `userid` = "{0}"'.format(user_id)
+            activities_routine = db.engine.execute(sql).fetchall()
+
+            get_V3_routines(activities_routine, reply_token, False)
+        
+        
+        # 瀏覽所有記事
+        elif message == "瀏覽所有記事":
+            print(f"\n ------------ 瀏覽所有記事 ------------")
+
+            sql = 'SELECT id, title, status FROM `notes` WHERE `status` = "成功" AND `userid` = "{0}"'.format(user_id)
+            notes = db.engine.execute(sql).fetchall()
+
+            get_V3_notes(notes, reply_token)
+
+        
+        # 查看使用教學
+        elif message == "使用教學":
+            str_1 = """歡迎來到使用教學～～\n目前有三個項目我會幫您 [記錄] 與 [提醒] ，分別是
+    1. 單次行程
+    2. 固定行程
+    3. 記事(備忘錄)"""
+            line_bot_api.push_message(user_id, TextSendMessage(text=str_1))
+
+            str_2 = """使用方式->直接輸入關鍵字\n現在試試看輸入關鍵字吧！\nEX:
+            家庭聚餐
+            固定週會
+            Netflix密碼123okok"""
+            line_bot_api.push_message(user_id, TextSendMessage(text=str_2))
+            str_3 = """想查詢所有資訊的話\n\n輸入"菜單" 或是 "Menu" \n\n就可以選擇想瀏覽的項目囉！！"""
+            line_bot_api.push_message(user_id, TextSendMessage(text=str_3))
+            
+
+        # Step 0
+        else:
+            try:
+                keyword = str(message).upper()
+                newInput = Activities(userid=user_id, date=today, activity=keyword, status='日期待確認')
+                db.session.add(newInput)
+                db.session.commit()
+                print(f"\n ------------ Step 0 ------------ id: {newInput.id}")
+            except exc.InvalidRequestError:
+                db.session.rollback()
+            except Exception as e:
+                print(e)
+
+            Aid = str(newInput.id)
+
+            # FlexMessage Menu
+            # 載入menu
+            Menu = json.load(open('menu.json','r',encoding='utf-8'))
+            actions = Menu['contents'][0]['body']['contents']
+
+            actions[0]['action']['data'] = f'add_schedule&{Aid}'
+            actions[1]['action']['data'] = f'search_schedule&{keyword}&{Aid}'
+            actions[2]['action']['data'] = f'add_note&{Aid}'
+            actions[3]['action']['data'] = f'search_note&{keyword}&{Aid}'
+            actions[4]['action']['data'] = f'add_routine_1&{keyword}&{Aid}'
+            actions[5]['action']['data'] = f'search_routine&{keyword}&{Aid}'
+
+            line_bot_api.reply_message(reply_token, FlexSendMessage('Menu', Menu))
 
 
 
@@ -1365,6 +1488,43 @@ def handle_postback(event):
         alerted.append(Eid)
         alerted.append(Eid)
 
+    param = ts.split("&")
+    if action == 'text':
+        on_off = param[1]
+        if param[2][0] == 'C':
+            group = group_model.Group.get_by_group_id(param[2])
+            group.turn_on_off_text_reply(on_off)
+        else:
+            user = user_model.User.get_by_user_id(param[2])
+            user.turn_on_off_text_reply(on_off)
+        text = '文字訊息已關閉自動回覆。' if on_off == 'off' else '文字訊息已開啟自動回覆。'
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
+    
+    elif action == 'file':
+        if param[1] == 'view':
+            pass
+        elif param[1] in ['on', 'off']:
+            on_off = param[1]
+            if param[2][0] == 'C':
+                group = group_model.Group.get_by_group_id(param[2])
+                group.turn_on_off_file_reply(on_off)
+            else:
+                user = user_model.User.get_by_user_id(param[2])
+                user.turn_on_off_file_reply(on_off)
+            text = '文件訊息已關閉自動儲存。' if on_off == 'off' else '文件訊息已開啟自動儲存。'
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
+    
+    elif action == 'image':
+        on_off = param[1]
+        if param[2][0] == 'C':
+            group = group_model.Group.get_by_group_id(param[2])
+            group.turn_on_off_image_reply(on_off)
+        else:
+            user = user_model.User.get_by_user_id(param[2])
+            user.turn_on_off_image_reply(on_off)
+        text = '圖片訊息已關閉自動回覆。' if on_off == 'off' else '圖片訊息已開啟自動回覆。'
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
+
 
 
 ######### 以下放多次使用的 def #########
@@ -1550,4 +1710,4 @@ import os
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', config.port))
     _thread.start_new_thread(periodGuy, ())
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=True)

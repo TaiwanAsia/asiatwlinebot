@@ -1,0 +1,66 @@
+{
+    "type": "bubble",
+    "size": "kilo",
+    "header": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "text",
+          "text": "訊息回覆設定",
+          "align": "start",
+          "weight": "bold",
+          "size": "xl",
+          "style": "normal",
+          "decoration": "none",
+          "gravity": "top"
+        }
+      ]
+    },
+    "body": {
+      "type": "box",
+      "layout": "vertical",
+      "contents": [
+        {
+          "type": "button",
+          "action": {
+            "type": "postback",
+            "label": "關閉文字訊息自動回覆",
+            "data": "text&off&",
+            "displayText": "關閉文字訊息自動回覆"
+          }
+        },
+        {
+          "type": "button",
+          "action": {
+            "type": "postback",
+            "label": "關閉文件訊息自動儲存",
+            "data": "file&off&",
+            "displayText": "關閉文件訊息自動儲存"
+          }
+        },
+        {
+          "type": "button",
+          "action": {
+            "type": "postback",
+            "label": "關閉圖片訊息自動儲存",
+            "data": "image&off&",
+            "displayText": "關閉圖片訊息自動儲存"
+          }
+        }
+      ],
+      "spacing": "none",
+      "margin": "none",
+      "offsetBottom": "none",
+      "paddingBottom": "none"
+    },
+    "direction": "ltr",
+    "styles": {
+      "hero": {
+        "separator": true
+      },
+      "body": {
+        "separator": true
+      }
+    }
+  }

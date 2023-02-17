@@ -1,2 +1,5 @@
 ngrok.exe
 config.py
+uploads/
+*/__pycache__/
+__pycache__/
