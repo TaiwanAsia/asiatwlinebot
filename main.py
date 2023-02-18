@@ -334,6 +334,7 @@ def handler_message(event):
             print('發生錯誤', e)
         finally:
             print("儲存結束")
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="文件已儲存。"))
         return
 
 # Message event: Image處理
@@ -362,6 +363,7 @@ def handle_message(event):
             print('發生錯誤', e)
         finally:
             print("儲存結束")
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="圖片已儲存。"))
         return
 
 
@@ -369,13 +371,11 @@ def handle_message(event):
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     message_type = event.message.type
-    # user_id = event.source.user_id
+    user_id = event.source.user_id
     user = get_user(event.source.user_id)
     reply_token = event.reply_token
     message = event.message.text
     today = datetime.now().strftime("%Y-%m-%d")
-    todaytime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    defaulttime = f"{today}" + "T" + str(datetime.now().strftime("%H")) + ":" + str(datetime.now().strftime("%M"))
 
 
     if event.source.type == 'group':
