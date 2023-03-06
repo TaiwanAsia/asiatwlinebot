@@ -2,6 +2,7 @@ from ast import If
 from base64 import encode
 from random import random
 from flask import Flask, request, abort
+from flask_mysqldb import MySQL
 from linebot import (
     LineBotApi, WebhookHandler
 )
@@ -11,9 +12,8 @@ from linebot.exceptions import (
 from linebot.models import *
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import exc
-import random, re, time, _thread
+import random, re, time, json, requests, threading, _thread
 from datetime import datetime, timedelta, timezone
-import json, requests
 from common.common import get_user, get_group, check_chatroom_uploads_folder, get_uploads_file
 from models import group_model, user_model
 
@@ -77,12 +77,12 @@ class Activities_routine(db.Model):
 
 
 # ============開機推播============
-with app.app_context():
-    sql = "SELECT DISTINCT userid FROM activities"
-    Edata = db.engine.execute(sql).fetchall()
-    list2 = []
-    for event in Edata:
-        list2.append(event[0])
+# with app.app_context():
+#     sql = "SELECT DISTINCT userid FROM activities"
+#     Edata = db.engine.execute(sql).fetchall()
+#     list2 = []
+#     for event in Edata:
+#         list2.append(event[0])
     # reply = "金秘書跟您說早安！\n試著直接輸入行程名稱或點選下方選單開始使用～"
     # reply = "小秘書升級中～請稍後！"
     # print(reply)
@@ -92,7 +92,6 @@ with app.app_context():
 
 # ============讓Heroku不會睡著============
 # import threading
-import requests
 # def wake_up_heroku():
 #     while 1==1:
 #         url = 'https://asiatwlinebot.herokuapp.com/' + 'heroku_wake_up'
@@ -111,7 +110,7 @@ import requests
 
 alertList = [] # [id, userid, date, activity, userreply] 當 userreply=0 則每分鐘繼續提醒; userreply=1 則停止提醒(從清單移除)
 def periodGuy():
-    while 1 == 1:
+    while True:
         dt1 = datetime.utcnow().replace(tzinfo=timezone.utc)
         now = dt1.astimezone(timezone(timedelta(hours=8))) # 轉換時區 -> 東八區
         nowdatetime = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -189,7 +188,7 @@ def periodGuy():
                 alertList.append([ARdata[0], ARdata[1], ARdata[2], ARdata[3], ARdata[4], '固定', ARdata[5], ARdata[6], ARdata[7]])
         
 
-        print("\nAlertList:\n",alertList,"\n")
+        # print("\nAlertList:\n",alertList,"\n")
 
         for idx, event in enumerate(alertList):    
             # print('\nEVENT: ',event,'\n')
@@ -611,7 +610,7 @@ def handle_message(event):
 
             # FlexMessage Menu
             # 載入menu
-            Menu = json.load(open('menu.json','r',encoding='utf-8'))
+            Menu = json.load(open('templates/menu.json','r',encoding='utf-8'))
             actions = Menu['contents'][0]['body']['contents']
 
             actions[0]['action']['data'] = f'add_schedule&{Aid}'
@@ -1238,7 +1237,7 @@ def handle_postback(event):
                 print(f"\n ------------ 新增固定行程 id: {newInput.id} ------------")
 
                 # 準備 FlexMessage
-                FlexMessage = json.load(open('routine_option_1.json','r',encoding='utf-8'))
+                FlexMessage = json.load(open('templates/routine_option_1.json','r',encoding='utf-8'))
                 actions = FlexMessage['contents'][0]['body']['contents']
                 for action in actions:
                     action['action']['data'] = action['action']['data'] + f"&{newInput.id}"
@@ -1365,7 +1364,7 @@ def handle_postback(event):
                 print(f"\n ------------ 新增固定行程 id: {newInput.id} ------------")
 
                 # 準備 FlexMessage
-                FlexMessage = json.load(open('routine_option_2.json','r',encoding='utf-8'))
+                FlexMessage = json.load(open('templates/routine_option_2.json','r',encoding='utf-8'))
                 contents = FlexMessage['contents']
                 for bubble in contents:
                     actions = bubble['body']['contents']
@@ -1542,7 +1541,7 @@ def get_V3_routines(activities_routine, reply_token, isPast):
                     'data' : f'routine&{routine[0]}'
                 } 
             })
-        Template = json.load(open('template.json','r',encoding='utf-8'))
+        Template = json.load(open('templates/template.json','r',encoding='utf-8'))
         Template['contents'][0]['body']['contents'] = contents
         line_bot_api.reply_message(reply_token, FlexSendMessage('Template',Template))
     else:
@@ -1598,7 +1597,7 @@ def get_V3_notes(notes, reply_token):
                     'data' : f'note&{note[0]}'
                 } 
             })
-        Template = json.load(open('template.json','r',encoding='utf-8'))
+        Template = json.load(open('templates/template.json','r',encoding='utf-8'))
         Template['contents'][0]['header']['contents'][0]['text'] = '記事'
         Template['contents'][0]['body']['contents'] = contents
         line_bot_api.reply_message(reply_token, FlexSendMessage('Template',Template))
@@ -1648,7 +1647,7 @@ def get_V3_activities(activities, reply_token, isPast):
                     'data' : f'activity&{activity[0]}'
                 } 
             })
-        Template = json.load(open('template.json','r',encoding='utf-8'))
+        Template = json.load(open('templates/template.json','r',encoding='utf-8'))
         Template['contents'][0]['body']['contents'] = contents
         line_bot_api.reply_message(reply_token, FlexSendMessage('Template',Template))
     else:
@@ -1697,13 +1696,9 @@ def get_V3_activity(id, reply_token, ifupdate):
     line_bot_api.reply_message(reply_token, buttons_template_message)
 
 
-# Message event: Sticker
-@handler.add(MessageEvent, message=StickerMessage)
-def handle_sticker_message(event):
-    print("--------------------STICKER--------------------")
-    reply_token = event.reply_token
-    sticker = random.randint(1988, 2027);
-    line_bot_api.reply_message(event.reply_token,StickerSendMessage(package_id=446, sticker_id=sticker))
+
+
+threading.Thread(target=periodGuy, daemon=True, name='periodGuy').start()
 
 
 import os
