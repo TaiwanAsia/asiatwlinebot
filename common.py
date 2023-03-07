@@ -1,6 +1,6 @@
 import os
-from models.user_model import User
-from models.group_model import Group
+from models import User
+from models import Group
 # from models.log_model import Log
 from datetime import datetime, timezone, timedelta
 

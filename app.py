@@ -1,8 +1,5 @@
-from ast import If
-from base64 import encode
-from random import random
 from flask import Flask, request, abort
-from flask_mysqldb import MySQL
+from flask_migrate import Migrate
 from linebot import (
     LineBotApi, WebhookHandler
 )
@@ -12,10 +9,11 @@ from linebot.exceptions import (
 from linebot.models import *
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import exc
-import random, re, time, json, requests, threading, _thread
+from sqlalchemy.sql import text
+import re, json, threading
 from datetime import datetime, timedelta, timezone
-from common.common import get_user, get_group, check_chatroom_uploads_folder, get_uploads_file
-from models import group_model, user_model
+from common import get_user, get_group, check_chatroom_uploads_folder, get_uploads_file
+from models import db, Activities, Activities_routine, Notes, Group, User
 
 
 app = Flask(__name__)
@@ -32,54 +30,30 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
         'connect_timeout': 10
     },
     "pool_recycle": 1
+     # MySQL (and MariaDB) servers are configured to drop connections that have been idle for 8 hours,
+     # which can result in an error like 2013: Lost connection to MySQL server during query.
+     # A default pool_recycle value of 2 hours (7200 seconds) is used to recreate connections before that timeout.
 }
 
 
-db = SQLAlchemy(app)
+
+db.init_app(app)
+
+# [id, userid, date, activity, userreply] 
+# 當 userreply=0 則每分鐘繼續提醒; userreply=1 則停止提醒(從清單移除)
+global alertList, alerted
+alertList = []
+alerted   = []
+from realtime import periodGuy
 
 
-class Activities(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    userid = db.Column(db.String(80), nullable=False)
-    date = db.Column(db.DateTime, nullable=False)
-    activity = db.Column(db.Text, nullable=False)
-    status = db.Column(db.String(80), nullable=False)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"))
-    def __repr__(self):
-        return '<Activities %r>' % self.activity
-
-class Notes(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    userid = db.Column(db.String(80), nullable=False)
-    title = db.Column(db.Text, nullable=False)
-    status = db.Column(db.String(80), nullable=False)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"))
-    def __repr__(self):
-        return '<Notes %r>' % self.note
-
-class Activities_routine(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    userid = db.Column(db.String(80), nullable=False)
-    title = db.Column(db.Text, nullable=True)
-    frequency = db.Column(db.Text, nullable=False)
-    frequency_2 = db.Column(db.Text, nullable=True)
-    time = db.Column(db.Time, nullable=False)
-    end_date = db.Column(db.Date, nullable=True)
-    status = db.Column(db.String(80), nullable=False)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"))
-    def __repr__(self):
-        return '<Activities_routine %r>' % self.activity_routine
-
-
-
-# db.init_app(app)
 
 
 
 # ============開機推播============
 # with app.app_context():
 #     sql = "SELECT DISTINCT userid FROM activities"
-#     Edata = db.engine.execute(sql).fetchall()
+#     Edata = db.session.execute(text(sql)).fetchall()
 #     list2 = []
 #     for event in Edata:
 #         list2.append(event[0])
@@ -90,203 +64,7 @@ class Activities_routine(db.Model):
 # ============開機推播============
 
 
-# ============讓Heroku不會睡著============
-# import threading
-# def wake_up_heroku():
-#     while 1==1:
-#         url = 'https://asiatwlinebot.herokuapp.com/' + 'heroku_wake_up'
-#         res = requests.get(url)
-#         if res.status_code == 200:
-#             print('Heroku喚醒成功')
-#         else:
-#             print('喚醒失敗')
-#         time.sleep(28*60)
 
-# threading.Thread(target=wake_up_heroku).start()
-# ============讓Heroku不會睡著============
-
-
-
-
-alertList = [] # [id, userid, date, activity, userreply] 當 userreply=0 則每分鐘繼續提醒; userreply=1 則停止提醒(從清單移除)
-def periodGuy():
-    while True:
-        dt1 = datetime.utcnow().replace(tzinfo=timezone.utc)
-        now = dt1.astimezone(timezone(timedelta(hours=8))) # 轉換時區 -> 東八區
-        nowdatetime = now.strftime("%Y-%m-%d %H:%M:%S")
-        nowtime = now.strftime("%H:%M:%S")
-        print('\n'+str(now))
-        tmrdate = (now + timedelta(days=2)).strftime("%Y-%m-%d")
-
-        # 每日08:30推播當日行程
-        if now.hour == 8 and now.minute == 30:
-            user_acti = {}
-            with app.app_context():
-                # 刪除未完成的新增行程
-                sql = f"DELETE FROM `activities` WHERE `status` IN ('日期待確認','待確認')"
-                db.engine.execute(sql)
-                sql = f"DELETE FROM `activities_routine` WHERE `status` = 'ready'"
-                db.engine.execute(sql)
-
-                # 抓取當日一次行程
-                sql = f"SELECT * FROM activities WHERE date >= '{nowdatetime}' AND date < '{tmrdate} 00:00:00' AND status = '已確認'"
-                Edata = db.engine.execute(sql).fetchall()
-
-                # 抓取當日固定行程
-                weekday = now.isoweekday()
-                day     = now.day
-                sql = f"SELECT * FROM activities_routine WHERE time >= '{nowtime}' AND `status` = 'finish' AND ((frequency = '每日') OR (frequency = '每週' AND frequency_2 = '{weekday}') OR (frequency = '每月' AND frequency_2 = '{day}')) AND time_format(`time`, '%%H:%%i') > '08:30:00'"
-                AR = db.engine.execute(sql).fetchall()
-
-            for event in Edata:
-                if event[1] not in user_acti:
-                    user_acti[event[1]] = ""
-                user_acti[event[1]] += f"\n{event[2]}\n{event[3]}"
-
-            for ARdata in AR:
-                if ARdata[1] not in user_acti:
-                    user_acti[ARdata[1]] = ""
-                user_acti[ARdata[1]] += f"\n\n{ARdata[5]}\n{ARdata[2]}"
-
-            print("\n每日推播")
-            for ua in user_acti:
-                line_bot_api.push_message(ua, TextSendMessage(text="金秘書跟您說早安！\n\n***今日事項***"+user_acti[ua]))
-
-        Edata     = []
-        AR        = []
-        
-        if 'alerted' in globals():
-            pass
-        else:
-            global alerted
-            alerted = []
-
-        # 每10分鐘重置一次 alertList
-        if now.minute%10 == 0:
-            print("\n每10分刷新提醒List")
-            global alertList
-            alertList = []
-            alerted = []
-        
-        with app.app_context():
-            # 抓取一次行程
-            sql = f"SELECT * FROM activities WHERE date >= '{nowdatetime}' AND date < '{tmrdate} 00:00:00' AND status IN ('已確認','已提醒1')"
-            Edata = db.engine.execute(sql).fetchall()
-
-            # 抓取當日固定行程
-            weekday = now.isoweekday()
-            day     = now.day
-            sql = f"SELECT * FROM activities_routine WHERE time_to_sec(TIMEDIFF(`time`,'{nowtime}'))/60 > 0 AND time_to_sec(TIMEDIFF(`time`,'{nowtime}'))/60 <= 3 AND `status` = 'finish' AND ((frequency = '每日') OR (frequency = '每週' AND frequency_2 = '{weekday}') OR (frequency = '每月' AND frequency_2 = '{day}'))"
-            AR = db.engine.execute(sql).fetchall()
-            
-        for event in Edata:
-            if [event[0], event[1], event[2], event[3], event[4], '單次'] not in alertList:
-                alertList.append([event[0], event[1], event[2], event[3], event[4], '單次'])
-
-        for ARdata in AR:
-            if [ARdata[0], ARdata[1], ARdata[2], ARdata[3], ARdata[4], ARdata[5], ARdata[6], ARdata[7], '固定'] not in alertList:
-                alertList.append([ARdata[0], ARdata[1], ARdata[2], ARdata[3], ARdata[4], '固定', ARdata[5], ARdata[6], ARdata[7]])
-        
-
-        # print("\nAlertList:\n",alertList,"\n")
-
-        for idx, event in enumerate(alertList):    
-            # print('\nEVENT: ',event,'\n')
-
-            # 60分鐘前開始第一次提醒，10分鐘前開始第二提醒
-            if event[5] == '單次':
-
-                Eid        = event[0]
-                Euserid    = event[1]
-                Edatetime  = event[2]
-                Eactivity  = event[3]
-                Euserreply = event[4]
-
-                now_naive = now.replace(tzinfo=None)
-
-                lastMinute = ((Edatetime - now_naive).total_seconds())/60
-
-                if (lastMinute <= 60 and lastMinute >= 50 and Euserreply == "已確認") or (lastMinute < 10 and lastMinute >= 0 and (Euserreply == "已確認" or Euserreply == "已提醒1")):
-                    print("\n行程ID: " + str(Eid) + " Bingo!")
-
-                    buttons_template_message = TemplateSendMessage(
-                        alt_text='關閉提醒按鈕樣版',
-                        template=ButtonsTemplate(
-                            thumbnail_image_url='https://img95.699pic.com/xsj/0y/bg/5p.jpg!/fw/700/watermark/url/L3hzai93YXRlcl9kZXRhaWwyLnBuZw/align/southeast',
-                            image_aspect_ratio='rectangle',
-                            image_size='cover',
-                            image_background_color='#FFFFFF',
-                            title= f"{Edatetime}",
-                            text= f"{Eactivity}",
-                            default_action=URIAction(
-                                label='view detail',
-                                uri='http://example.com/page/123'
-                            ),
-                            actions=[
-                                MessageAction(
-                                    label = "關閉提醒",
-                                    text  = f"OK{Eid}"
-                                )
-                            ]
-                        )
-                    )
-                    line_bot_api.push_message(Euserid, buttons_template_message)
-
-            # 固定行程在db選取時，已選取三分鐘內行程
-            if event[5] == '固定':
-                Eid         = event[0]
-                Euserid     = event[1]
-                Etitle      = event[2]
-                Efrequency  = event[3]
-                Efrequency2 = event[4]
-                Etime       = event[6]
-                Eenddate    = event[7]
-                Estatus     = event[8]
-                Etype       = event[5]
-
-                print("Alerted\n", alerted)
-                if Estatus == "finish" and (alerted.count(Eid) <= 3):
-
-                    print(f"\n ------------ 固定行程提醒 ID: {Eid} ------------")
-
-                    buttons_template_message = TemplateSendMessage(
-                        alt_text='關閉提醒按鈕樣版',
-                        template=ButtonsTemplate(
-                            thumbnail_image_url='https://metrifit.com/wp-content/uploads/2020/01/shutterstock_1306931836-e1579713194166.jpg',
-                            image_aspect_ratio='rectangle',
-                            image_size='cover',
-                            image_background_color='#FFFFFF',
-                            title= f"{Etitle}",
-                            text= f"{Efrequency + Efrequency2} {Etime}",
-                            default_action=URIAction(
-                                label='view detail',
-                                uri='http://example.com/page/123'
-                            ),
-                            actions=[
-                                PostbackAction(
-                                    label = "我知道了",
-                                    display_text = "我知道了",
-                                    data = f'shutup&{idx}'
-                                ),
-                            ]
-                        )
-                    )
-                    line_bot_api.push_message(Euserid, buttons_template_message)
-
-                    alerted.append(Eid)
-
-        print("\n今日提醒事項: ")
-        print(alertList)
-
-        time.sleep(57)
-
-    
-# ============讓Heroku不會睡著============
-# @app.route("/heroku_wake_up")
-def wake_up():
-    return "Hey! 醒醒阿!!"
-# ============讓Heroku不會睡著============
-    
 
 # 監測
 @app.route("/callback", methods=['POST'])
@@ -294,7 +72,6 @@ def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
     app.logger.info("Request body: " + body)
-    # print('body'+body)
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
@@ -430,10 +207,8 @@ def handle_message(event):
 
     if chatroom.text_reply == 'off':
         return
+    
     else:
-
-        
-
 
         possible_message = ['至明天', '三天內', '七天內', '一周內', '一週內', '一個月', '未來所有行程', '今日完成行程']
         # 主菜單
@@ -514,9 +289,9 @@ def handle_message(event):
             isPast = False
             if message == "今日完成行程":
                 isPast = True
-                sql_cmd = f"""SELECT id, date, activity FROM activities WHERE
-                userid = '{user_id}' AND date BETWEEN '{today}' AND '{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}' AND status = '已確認'
-                ORDER BY `date`"""
+                sql_cmd = f"""SELECT id, time, title FROM activities WHERE
+                userid = '{user_id}' AND time BETWEEN '{today}' AND '{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}' AND status = '已確認'
+                ORDER BY `time`"""
             else:
                 add_days = 9999
                 if re.match('至明天',message):
@@ -527,11 +302,11 @@ def handle_message(event):
                     add_days = 8
 
                 date2 = (datetime.now() + timedelta(days=add_days)).strftime("%Y-%m-%d") 
-                sql_cmd = f"""SELECT id, date, activity FROM activities WHERE
-                    userid = '{user_id}' AND date BETWEEN '{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}' AND '{date2}' AND status = '已確認'
-                    ORDER BY `date`"""
+                sql_cmd = f"""SELECT id, time, title FROM activities WHERE
+                    userid = '{user_id}' AND time BETWEEN '{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}' AND '{date2}' AND status = '已確認'
+                    ORDER BY `time`"""
 
-            activities = db.engine.execute(sql_cmd).fetchall()
+            activities = db.session.execute(text(sql_cmd)).fetchall()
 
             get_V3_activities(activities, reply_token, isPast)
 
@@ -551,7 +326,7 @@ def handle_message(event):
                         alertList[idx][4] = "已提醒2"
                         reply = "第二次提醒已關閉。"
 
-            db.engine.execute(sql)
+            db.session.execute(text(sql))
             print(f"{reply}: {Eid}")
             line_bot_api.reply_message(reply_token, TextSendMessage(text = f"行程{Eid}: {reply}"))
 
@@ -561,7 +336,7 @@ def handle_message(event):
             print(f"\n ------------ 瀏覽所有固定行程 ------------")
 
             sql = 'SELECT * FROM `activities_routine` WHERE `status` = "finish" AND `userid` = "{0}"'.format(user_id)
-            activities_routine = db.engine.execute(sql).fetchall()
+            activities_routine = db.session.execute(text(sql)).fetchall()
 
             get_V3_routines(activities_routine, reply_token, False)
         
@@ -571,7 +346,7 @@ def handle_message(event):
             print(f"\n ------------ 瀏覽所有記事 ------------")
 
             sql = 'SELECT id, title, status FROM `notes` WHERE `status` = "成功" AND `userid` = "{0}"'.format(user_id)
-            notes = db.engine.execute(sql).fetchall()
+            notes = db.session.execute(text(sql)).fetchall()
 
             get_V3_notes(notes, reply_token)
 
@@ -597,7 +372,7 @@ def handle_message(event):
         else:
             try:
                 keyword = str(message).upper()
-                newInput = Activities(userid=user_id, date=today, activity=keyword, status='日期待確認')
+                newInput = Activities(userid=user_id, time=today, title=keyword, status='日期待確認')
                 db.session.add(newInput)
                 db.session.commit()
                 print(f"\n ------------ Step 0 ------------ id: {newInput.id}")
@@ -627,22 +402,19 @@ def handle_message(event):
 
 @handler.add(PostbackEvent)
 def handle_postback(event):
+    from sqlalchemy.sql import text
     ts = str(event.postback.data)
-    # print("Postback: " + ts)
     action = ts.split("&")[0]
-    # keyword = str(ts.split("&")[1])
-    # print("action: " + action + "\nAid: " + keyword)
     user_id = event.source.user_id
     reply_token = event.reply_token
-    today = datetime.now().strftime("%Y-%m-%d")
-    todaytime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # 取消新增行程 [After Confirm template]
     if action == "cancel":
         table = str(ts.split("&")[1])
         id = str(ts.split("&")[2])
         sql = f"DELETE FROM `{table}` WHERE (`id` = '{id}')"
-        db.engine.execute(sql)
+        db.session.execute(text(sql))
+        db.session.commit()
         text_message = TextSendMessage(text = "成功取消新增。")
         line_bot_api.reply_message(reply_token, text_message)
 
@@ -656,17 +428,20 @@ def handle_postback(event):
 
         if table == "activities":
             sql = f"UPDATE `{table}` SET status = '已確認' WHERE (`id` = '{id}')"
-            db.engine.execute(sql)
+            db.session.execute(text(sql))
+            db.session.commit()
+
             get_V3_activity(id, reply_token, False)
 
 
         if table == "notes":
-            sql = f'SELECT `id`, `date`, `activity` FROM `activities` WHERE `id` = {id}'
-            data = db.engine.execute(sql).fetchone()
+            sql = f'SELECT `id`, `time`, `title` FROM `activities` WHERE `id` = {id}'
+            data = db.session.execute(text(sql)).fetchone()
 
             # 先刪 Step 0 新增的activity
             sql = f"DELETE FROM `activities` WHERE (`id` = '{id}')"
-            db.engine.execute(sql)
+            db.session.execute(text(sql))
+            db.session.commit()
 
             newInput = Notes(userid=user_id, title=data[2], status='成功')
             db.session.add(newInput)
@@ -674,7 +449,7 @@ def handle_postback(event):
             Aid = str(newInput.id)
 
             sql = f'SELECT `id`, `title`, `status` FROM `notes` WHERE `id` = {Aid}'
-            data = db.engine.execute(sql).fetchone()
+            data = db.session.execute(text(sql)).fetchone()
             get_V3_note(Aid, reply_token, '新增成功')
 
 
@@ -696,11 +471,12 @@ def handle_postback(event):
         Etime = a['datetime'][11:]
         Edatetime = str(Edate) + " " + str(Etime) + ":00"
 
-        sql = f"""UPDATE activities SET date = '{Edatetime}', status = '待確認' WHERE id = {id}"""
-        db.engine.execute(sql)
+        sql = f"UPDATE activities SET `time` = '{Edatetime}', `status` = '待確認' WHERE id = {id}"
+        db.session.execute(text(sql))
+        db.session.commit()
 
-        sql = f"""SELECT id, date, activity FROM activities WHERE id = {id}"""
-        data = db.engine.execute(sql).fetchone()
+        sql = f"""SELECT id, time, title FROM activities WHERE id = {id}"""
+        data = db.session.execute(text(sql)).fetchone()
 
         if data == None:
             reply = "請重新新增。"
@@ -736,12 +512,13 @@ def handle_postback(event):
         
         # 先刪 Step 0 新增的activity
         sql = f"DELETE FROM `activities` WHERE (`id` = '{id}')"
-        db.engine.execute(sql)
+        db.session.execute(text(sql))
+        db.session.commit()
 
         # LIKE查詢
         date2 = (datetime.now() + timedelta(days=9999)).strftime("%Y-%m-%d") 
-        sql = 'SELECT `id`, `date`, `activity` FROM `activities` WHERE `status` = "已確認" AND `userid` = "{0}" AND `activity` LIKE "{1}" AND `date` BETWEEN "{2}" AND "{3}" ORDER BY `date`'.format(user_id, "%%"+keyword.upper()+"%%", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), date2)
-        activities = db.engine.execute(sql).fetchall()
+        sql = 'SELECT `id`, `time`, `title` FROM `activities` WHERE `status` = "已確認" AND `userid` = "{0}" AND `title` LIKE "{1}" AND `time` BETWEEN "{2}" AND "{3}" ORDER BY `time`'.format(user_id, "%%"+keyword.upper()+"%%", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), date2)
+        activities = db.session.execute(text(sql)).fetchall()
 
         if len(activities) > 0:
             get_V3_activities(activities, reply_token, False)
@@ -769,7 +546,9 @@ def handle_postback(event):
         Etime = a['datetime'][11:]
         Edatetime = str(Edate) + " " + str(Etime) + ":00"
 
-        Activities.query.filter(Activities.id == id).update({'date' : Edatetime})
+        actv = Activities.query.filter(Activities.id == id).first()
+        actv.time = Edatetime
+
         db.session.commit()
 
         get_V3_activity(id, reply_token, True)
@@ -783,8 +562,8 @@ def handle_postback(event):
 
         print(f"\n ------------ 行程刪除 id:{id} ------------ stage:{stage}")
         
-        sql = f'SELECT `id`, `date`, `activity` FROM `activities` WHERE `id` = {id}'
-        data = db.engine.execute(sql).fetchone()
+        sql = f'SELECT `id`, `time`, `title` FROM `activities` WHERE `id` = {id}'
+        data = db.session.execute(text(sql)).fetchone()
 
         if stage == "1":
             confirm_template_message = TemplateSendMessage(
@@ -809,7 +588,8 @@ def handle_postback(event):
 
         if stage == "2":
             sql = f"DELETE FROM `activities` WHERE (`id` = '{id}')"
-            db.engine.execute(sql)
+            db.session.execute(text(sql))
+            db.session.commit()
 
             line_bot_api.reply_message(reply_token, TextSendMessage(text="行程刪除成功"))
 
@@ -822,7 +602,8 @@ def handle_postback(event):
         # 先刪 Step 0 新增的activity
         id = ts.split("&")[1]
         sql = f"DELETE FROM `activities` WHERE (`id` = '{id}')"
-        db.engine.execute(sql)
+        db.session.execute(text(sql))
+        db.session.commit()
         
         buttons_template_message = TemplateSendMessage(
             alt_text='行程瀏覽',
@@ -867,8 +648,8 @@ def handle_postback(event):
 
         print(f"\n ------------ 新增記事 ------------ id: {id}")
 
-        sql = f'SELECT `id`, `date`, `activity` FROM `activities` WHERE `id` = {id}'
-        data = db.engine.execute(sql).fetchone()
+        sql = f'SELECT `id`, `time`, `title` FROM `activities` WHERE `id` = {id}'
+        data = db.session.execute(text(sql)).fetchone()
         
         if data == None:
             reply = "請重新新增。"
@@ -904,11 +685,12 @@ def handle_postback(event):
         
         # 先刪 Step 0 新增的activity
         sql = f"DELETE FROM `activities` WHERE (`id` = '{id}')"
-        db.engine.execute(sql)
+        db.session.execute(text(sql))
+        db.session.commit()
 
         # LIKE查詢
         sql = 'SELECT `id`, `title`, `status` FROM `notes` WHERE `status` = "成功" AND `userid` = "{0}" AND `title` LIKE "{1}" ORDER BY `created_at`'.format(user_id, "%%"+keyword.upper()+"%%")
-        notes = db.engine.execute(sql).fetchall()
+        notes = db.session.execute(text(sql)).fetchall()
 
         get_V3_notes(notes, reply_token)
 
@@ -930,7 +712,7 @@ def handle_postback(event):
         print(f"\n ------------ 記事刪除 id:{id} ------------ stage:{stage}")
         
         sql = f'SELECT `id`, `title`, `status` FROM `notes` WHERE `id` = {id}'
-        data = db.engine.execute(sql).fetchone()
+        data = db.session.execute(text(sql)).fetchone()
 
         if stage == "1":
             confirm_template_message = TemplateSendMessage(
@@ -968,12 +750,13 @@ def handle_postback(event):
 
         # 先刪 Step 0 新增的activity
         sql = f"DELETE FROM `activities` WHERE (`id` = '{id}')"
-        db.engine.execute(sql)
+        db.session.execute(text(sql))
+        db.session.commit()
 
         # LIKE查詢
         date2 = (datetime.now() + timedelta(days=9999)).strftime("%Y-%m-%d") 
         sql = 'SELECT * FROM `activities_routine` WHERE `status` = "finish" AND `userid` = "{0}" AND `title` LIKE "{1}" AND `end_date` BETWEEN "{2}" AND "{3}" ORDER BY `created_at`'.format(user_id, "%%"+keyword.upper()+"%%", datetime.now().strftime('%Y-%m-%d %H:%M:%S'), date2)
-        activities_routine = db.engine.execute(sql).fetchall()
+        activities_routine = db.session.execute(text(sql)).fetchall()
 
         if len(activities_routine) > 0:
             get_V3_routines(activities_routine, reply_token, False)
@@ -1001,16 +784,17 @@ def handle_postback(event):
         if page == 999:
             print(f"\n ------------ id:{id} ------------")
             sql = f"SELECT * FROM activities_routine WHERE (`id` = '{id}')"
-            ARdata = db.engine.execute(sql).fetchone()
+            ARdata = db.session.execute(text(sql)).fetchone()
             sql = f"DELETE FROM `activities_routine` WHERE (`id` = '{id}')"
-            db.engine.execute(sql)
+            db.session.execute(text(sql))
+            db.session.commit()
             reply = f"行程: {ARdata[2]} 已刪除。"
             line_bot_api.reply_message(reply_token, TextSendMessage(text = reply))
         
         else:
             limitFrom = int(page) -1
             sql = f"SELECT * FROM `activities_routine` WHERE (`userid` = '{user_id}') LIMIT {limitFrom*3},3"
-            AR = db.engine.execute(sql).fetchall()
+            AR = db.session.execute(text(sql)).fetchall()
 
             if AR:
                 actionsR = []
@@ -1063,7 +847,8 @@ def handle_postback(event):
 
         # 先刪 Step 0 新增的activity
         sql = f"DELETE FROM `activities` WHERE (`id` = '{id}')"
-        db.engine.execute(sql)
+        db.session.execute(text(sql))
+        db.session.commit()
 
         # Step 1 選擇頻率
         buttons_template_message = TemplateSendMessage(
@@ -1117,6 +902,10 @@ def handle_postback(event):
         # 頻率[每日]
         if frequency == "每日":
 
+            sql = "SET time_zone='+8:00'"
+            db.session.execute(text(sql))
+            db.session.commit()
+
             # 頻率[每日] - 選擇幾點幾分
             if stage == 1:
 
@@ -1158,9 +947,6 @@ def handle_postback(event):
                 data = event.postback.params
                 time = data['time']
 
-                sql = "SET time_zone='+8:00'"
-                db.engine.execute(sql)
-
                 # 更新資料 time
                 Activities_routine.query.filter(Activities_routine.id == id).update({'time' : time})
                 db.session.commit()
@@ -1199,7 +985,7 @@ def handle_postback(event):
                 db.session.commit()
 
                 sql = f"SELECT id, title, frequency, frequency_2, time, end_date, status FROM `activities_routine` WHERE id = '{id}'"
-                routine = db.engine.execute(sql).fetchone()
+                routine = db.session.execute(text(sql)).fetchone()
 
                 confirm_template_message = TemplateSendMessage(
                     alt_text='Confirm template',
@@ -1284,9 +1070,6 @@ def handle_postback(event):
                 time = a['time']
                 print(f"\n ------------ 更新固定行程 time: {time} ------------")
 
-                sql = "SET time_zone='+8:00'"
-                db.engine.execute(sql)
-
                 # 更新資料 frequency_2, time
                 Activities_routine.query.filter(Activities_routine.id == id).update({'time' : time, 'frequency_2' : frequency_2})
                 db.session.commit()
@@ -1326,7 +1109,7 @@ def handle_postback(event):
                 db.session.commit()
 
                 sql = f"SELECT id, title, frequency, frequency_2, time, end_date, status FROM `activities_routine` WHERE id = '{id}'"
-                routine = db.engine.execute(sql).fetchone()
+                routine = db.session.execute(text(sql)).fetchone()
 
                 confirm_template_message = TemplateSendMessage(
                     alt_text='Confirm template',
@@ -1412,9 +1195,6 @@ def handle_postback(event):
                 a = event.postback.params
                 time = a['time']
                 print(f"\n ------------ 更新固定行程 time: {time} ------------")
-
-                sql = "SET time_zone='+8:00'"
-                db.engine.execute(sql)
                 
                 # 更新資料 frequency_2, time
                 Activities_routine.query.filter(Activities_routine.id == id).update({'time' : time, 'frequency_2' : frequency_2})
@@ -1455,7 +1235,7 @@ def handle_postback(event):
                 db.session.commit()
                 
                 sql = f"SELECT id, title, frequency, frequency_2, time, end_date, status FROM `activities_routine` WHERE id = '{id}'"
-                routine = db.engine.execute(sql).fetchone()
+                routine = db.session.execute(text(sql)).fetchone()
 
                 confirm_template_message = TemplateSendMessage(
                     alt_text='Confirm template',
@@ -1491,10 +1271,10 @@ def handle_postback(event):
     if action == 'text':
         on_off = param[1]
         if param[2][0] == 'C':
-            group = group_model.Group.get_by_group_id(param[2])
+            group = Group.get_by_group_id(param[2])
             group.turn_on_off_text_reply(on_off)
         else:
-            user = user_model.User.get_by_user_id(param[2])
+            user = User.get_by_user_id(param[2])
             user.turn_on_off_text_reply(on_off)
         text = '文字訊息已關閉自動回覆。' if on_off == 'off' else '文字訊息已開啟自動回覆。'
         line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
@@ -1505,10 +1285,10 @@ def handle_postback(event):
         elif param[1] in ['on', 'off']:
             on_off = param[1]
             if param[2][0] == 'C':
-                group = group_model.Group.get_by_group_id(param[2])
+                group = Group.get_by_group_id(param[2])
                 group.turn_on_off_file_reply(on_off)
             else:
-                user = user_model.User.get_by_user_id(param[2])
+                user = User.get_by_user_id(param[2])
                 user.turn_on_off_file_reply(on_off)
             text = '文件訊息已關閉自動儲存。' if on_off == 'off' else '文件訊息已開啟自動儲存。'
             line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
@@ -1516,10 +1296,10 @@ def handle_postback(event):
     elif action == 'image':
         on_off = param[1]
         if param[2][0] == 'C':
-            group = group_model.Group.get_by_group_id(param[2])
+            group = Group.get_by_group_id(param[2])
             group.turn_on_off_image_reply(on_off)
         else:
-            user = user_model.User.get_by_user_id(param[2])
+            user = User.get_by_user_id(param[2])
             user.turn_on_off_image_reply(on_off)
         text = '圖片訊息已關閉自動回覆。' if on_off == 'off' else '圖片訊息已開啟自動回覆。'
         line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
@@ -1551,8 +1331,9 @@ def get_V3_routines(activities_routine, reply_token, isPast):
 
 # 取得單一固定行程內容[Button template]
 def get_V3_routine(id, reply_token):
+    from sqlalchemy.sql import text
     sql = f"SELECT id, title, frequency, frequency_2, time, end_date, status FROM `activities_routine` WHERE id = '{id}'"
-    data = db.engine.execute(sql).fetchone()
+    data = db.session.execute(text(sql)).fetchone()
 
     title       = data[1]
     frequency_2 = data[3]+" " if data[3] is not None else ''
@@ -1608,7 +1389,7 @@ def get_V3_notes(notes, reply_token):
 # 取得單一記事內容[Button template]
 def get_V3_note(id, reply_token, stage):
     sql = f"SELECT `id`, `title`, `status` FROM `notes` WHERE `id` = {id} AND `status` = '成功'"
-    data = db.engine.execute(sql).fetchone()
+    data = db.session.execute(text(sql)).fetchone()
 
     buttons_template_message = TemplateSendMessage(
         alt_text = f'記事 {data[1]}',
@@ -1659,8 +1440,8 @@ def get_V3_activities(activities, reply_token, isPast):
 
 # 取得單一行程內容[Button template]
 def get_V3_activity(id, reply_token, ifupdate):
-    sql = f'SELECT `id`, `date`, `activity` FROM `activities` WHERE `id` = {id}'
-    data = db.engine.execute(sql).fetchone()
+    sql = f'SELECT `id`, `time`, `title` FROM `activities` WHERE `id` = {id}'
+    data = db.session.execute(text(sql)).fetchone()
 
     title = data[2]
     if ifupdate == True:
@@ -1698,11 +1479,10 @@ def get_V3_activity(id, reply_token, ifupdate):
 
 
 
-threading.Thread(target=periodGuy, daemon=True, name='periodGuy').start()
+threading.Thread(target=periodGuy, args=(alertList, alerted), daemon=True, name='periodGuy').start()
 
 
 import os
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', config.port))
-    _thread.start_new_thread(periodGuy, ())
     app.run(host='0.0.0.0', port=port, debug=True)
