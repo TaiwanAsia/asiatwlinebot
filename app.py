@@ -47,9 +47,6 @@ imgur_access_token  = 'f7f66bd26a9447435edddc02146e0aa3d6fc4a5e'
 imgur_refresh_token = 'f152d59b47d908344eea63821004b420544712ae'
 imgur_album_id      = 'HLxMNTE'
 client = ImgurClient(imgur_client_id, imgur_client_secret, imgur_access_token, imgur_refresh_token)
-# local_img_file      = f'./uploads/Cd3929322489fb8d23b071b0d53589248/17665313608328.png'
-# image  = upload_docs(client, local_img_file, imgur_album_id)
-# print(f"圖片網址: {image['link']}")
 
 
 
@@ -1343,14 +1340,12 @@ def handle_postback(event):
                 line_bot_api.reply_message(reply_token, TextSendMessage(text=reply_message))
                 return
             Template = json.load(open('templates/template.json','r',encoding='utf-8'))
+            Template['contents'][0]['header']['contents'][0]['text'] = '選取儲存圖片'
             targets = get_stored_docs_by_chatroom(path)
-            template_contents = Template['contents'][0]['body']['contents']
-            print(template_contents)
             for target in targets:
                 filename, extension = os.path.splitext(target)
                 if extension not in ['.png', '.jpg']:
                     continue
-                print(f'c: \n{path}/{target}\n')
                 file_info = Docs.query.filter(Docs.local == f'{path}/{target}').first()
                 if file_info is None:
                     continue
@@ -1366,13 +1361,13 @@ def handle_postback(event):
                             "type": "button",
                             "action": {
                                 "type": "postback",
-                                "label": f"{filename}",
+                                "label": "取得圖片",
                                 "data": f"sendImage&{file_info.url}"
                             }
                         }
                     ]
                 })
-                del Template['contents'][0]['body']['contents'][0]
+            del Template['contents'][0]['body']['contents'][0]
             line_bot_api.reply_message(reply_token, FlexSendMessage('Template',Template))
 
 
