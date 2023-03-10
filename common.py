@@ -49,3 +49,21 @@ def add_group(group_id):
 #         chatroom_id = chatroom.user_id
 #     log_user = Log(chatroom=chatroom_id, message_type=message_type, message_content=message_content, created_at=datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"))
 #     log_user.save()
+
+def get_stored_docs_by_chatroom(path):
+    files = os.listdir(path)
+    return files
+
+def upload_docs(client_data, local_file, album, name = 'test-name!' ,title = 'test-title'):
+    config = {
+        'album':  album,
+        'name': name,
+        'title': title,
+        'description': f'test-{datetime.now()}'
+    }
+
+    print("Uploading image... ")
+    image = client_data.upload_from_path(local_file, config=config, anon=False)
+    print("Done")
+
+    return image

@@ -66,6 +66,25 @@ class Activities_routine(db.Model):
 
 
 
+
+
+
+
+class Docs(db.Model):
+    id      = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.String(45), nullable=False)
+    type    = db.Column(db.String(10), nullable=False)
+    local   = db.Column(db.String(225), nullable=False)
+    url     = db.Column(db.String(225), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"))
+    
+    def __repr__(self):
+        return '<Docs  %r %r>' % (self.local, self.url)
+
+
+
+
+
 class Notes(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     userid = db.Column(db.String(80), nullable=False)
