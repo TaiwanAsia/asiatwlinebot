@@ -10,10 +10,11 @@ from linebot.models import *
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import exc
 from sqlalchemy.sql import text
+from imgurpython import ImgurClient
 import re, json, threading
 from datetime import datetime, timedelta, timezone
-from common import get_user, get_group, check_chatroom_uploads_folder, get_uploads_file
-from models import db, Activities, Activities_routine, Notes, Group, User
+from common import get_user, get_group, check_chatroom_uploads_folder, get_uploads_file, get_stored_docs_by_chatroom, upload_docs
+from models import db, Activities, Activities_routine, Notes, Group, User, Docs
 
 
 app = Flask(__name__)
@@ -38,6 +39,20 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 
 
 db.init_app(app)
+
+# Imgur
+imgur_client_id     = 'de1eaec338fc230'
+imgur_client_secret = 'a4bed7e222664343dd71151eb97f3952e1cf7bd9'
+imgur_access_token  = 'f7f66bd26a9447435edddc02146e0aa3d6fc4a5e'
+imgur_refresh_token = 'f152d59b47d908344eea63821004b420544712ae'
+imgur_album_id      = 'HLxMNTE'
+client = ImgurClient(imgur_client_id, imgur_client_secret, imgur_access_token, imgur_refresh_token)
+# local_img_file      = f'./uploads/Cd3929322489fb8d23b071b0d53589248/17665313608328.png'
+# image  = upload_docs(client, local_img_file, imgur_album_id)
+# print(f"圖片網址: {image['link']}")
+
+
+
 
 # [id, userid, date, activity, userreply] 
 # 當 userreply=0 則每分鐘繼續提醒; userreply=1 則停止提醒(從清單移除)
@@ -131,15 +146,31 @@ def handle_message(event):
         content = line_bot_api.get_message_content(event.message.id)
         check_chatroom_uploads_folder(chatroom_id)
         path = './uploads/' + chatroom_id + '/' + event.message.id + '.png'
+
+        # save on local
         try:
             with open(path, 'wb') as fd:
                 for chunk in content.iter_content():
                     fd.write(chunk)
         except Exception as e:
-            print('發生錯誤', e)
+            print('儲存發生錯誤', e)
         finally:
             print("儲存結束")
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text="圖片已儲存。"))
+
+        # upload to Imgur
+        try:
+            upload = upload_docs(client, path, imgur_album_id)
+            print(f"圖片網址: {upload['link']}")
+            img = Docs(user_id=user.user_id, type='image', local=path, url=upload['link'])
+            db.session.add(img)
+            db.session.commit()
+        except Exception as e:
+            print('上傳Imgur發生錯誤', e)
+        finally:
+            print("上傳Imgur結束")
+        
+        
         return
 
 
@@ -185,7 +216,7 @@ def handle_message(event):
             ]
         )))
         return
-    elif message in ['文件', '檔案', '備份', '圖片']:
+    elif message in ['文件', '檔案', '備份', '圖片', '照片']:
         SettingsMessage = json.load(open('templates/settings.json', 'r', encoding='utf-8'))
         box = SettingsMessage["body"]["contents"]
         box[0]['action']['label']       = '檢視儲存文件'
@@ -1276,12 +1307,21 @@ def handle_postback(event):
         else:
             user = User.get_by_user_id(param[2])
             user.turn_on_off_text_reply(on_off)
-        text = '文字訊息已關閉自動回覆。' if on_off == 'off' else '文字訊息已開啟自動回覆。'
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
+        reply_message = '文字訊息已關閉自動回覆。' if on_off == 'off' else '文字訊息已開啟自動回覆。'
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=reply_message))
     
     elif action == 'file':
         if param[1] == 'view':
-            pass
+            folder    = param[2]
+            # subfolder = param[3]
+            path      = f'./uploads/{folder}'
+            if not os.path.isdir(path):
+                reply_message = "您尚未上傳任何文件"
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=reply_message))
+                return
+
+            files = get_stored_docs_by_chatroom(path)
+            
         elif param[1] in ['on', 'off']:
             on_off = param[1]
             if param[2][0] == 'C':
@@ -1290,21 +1330,75 @@ def handle_postback(event):
             else:
                 user = User.get_by_user_id(param[2])
                 user.turn_on_off_file_reply(on_off)
-            text = '文件訊息已關閉自動儲存。' if on_off == 'off' else '文件訊息已開啟自動儲存。'
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
+            reply_message = '文件訊息已關閉自動儲存。' if on_off == 'off' else '文件訊息已開啟自動儲存。'
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=reply_message))
     
     elif action == 'image':
-        on_off = param[1]
-        if param[2][0] == 'C':
-            group = Group.get_by_group_id(param[2])
-            group.turn_on_off_image_reply(on_off)
-        else:
-            user = User.get_by_user_id(param[2])
-            user.turn_on_off_image_reply(on_off)
-        text = '圖片訊息已關閉自動回覆。' if on_off == 'off' else '圖片訊息已開啟自動回覆。'
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
+        if param[1] == 'view':
+            folder    = param[2]
+            # subfolder = param[3]
+            path      = f'./uploads/{folder}'
+            if not os.path.isdir(path):
+                reply_message = "您尚未上傳任何文件"
+                line_bot_api.reply_message(reply_token, TextSendMessage(text=reply_message))
+                return
+            Template = json.load(open('templates/template.json','r',encoding='utf-8'))
+            targets = get_stored_docs_by_chatroom(path)
+            template_contents = Template['contents'][0]['body']['contents']
+            print(template_contents)
+            for target in targets:
+                filename, extension = os.path.splitext(target)
+                if extension not in ['.png', '.jpg']:
+                    continue
+                print(f'c: \n{path}/{target}\n')
+                file_info = Docs.query.filter(Docs.local == f'{path}/{target}').first()
+                if file_info is None:
+                    continue
+                Template['contents'][0]['body']['contents'].append({
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "image",
+                            "url": f"{file_info.url}"
+                        },
+                        {
+                            "type": "button",
+                            "action": {
+                                "type": "postback",
+                                "label": f"{filename}",
+                                "data": f"sendImage&{file_info.url}"
+                            }
+                        }
+                    ]
+                })
+                del Template['contents'][0]['body']['contents'][0]
+            line_bot_api.reply_message(reply_token, FlexSendMessage('Template',Template))
 
 
+
+        elif param[1] in ['on', 'off']:
+            on_off = param[1]
+            if param[2][0] == 'C':
+                group = Group.get_by_group_id(param[2])
+                group.turn_on_off_image_reply(on_off)
+            else:
+                user = User.get_by_user_id(param[2])
+                user.turn_on_off_image_reply(on_off)
+            reply_message = '圖片訊息已關閉自動回覆。' if on_off == 'off' else '圖片訊息已開啟自動回覆。'
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=reply_message))
+
+
+    elif action == 'sendImage':
+        url = param[1]
+        image_message = ImageSendMessage(
+            original_content_url=url,
+            preview_image_url=url
+        )
+        line_bot_api.reply_message(reply_token, image_message)
+
+
+    
 
 ######### 以下放多次使用的 def #########
 
